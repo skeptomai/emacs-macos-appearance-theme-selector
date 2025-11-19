@@ -55,6 +55,46 @@ A smart Emacs package for semi-automatic theme selection based on macOS system a
   (appearance-theme-selector-mode 1))
 ```
 
+### Method 4: Doom Emacs
+
+**Option A: Package recipe (Recommended)**
+
+1. Add to `~/.doom.d/packages.el`:
+```elisp
+(package! appearance-theme-selector
+  :recipe (:host github :repo "skeptomai/emacs-macos-appearance-theme-selector"))
+```
+
+2. Add to `~/.doom.d/config.el`:
+```elisp
+(use-package! appearance-theme-selector
+  :config
+  (setq appearance-theme-selector-light-themes
+        '(doom-one-light doom-solarized-light doom-gruvbox-light))
+  (setq appearance-theme-selector-dark-themes
+        '(doom-one doom-dark+ doom-gruvbox))
+  (appearance-theme-selector-mode 1))
+```
+
+3. Run `doom sync` to install the package.
+
+**Option B: Local installation**
+
+1. Clone to your Doom local packages directory:
+```bash
+git clone https://github.com/skeptomai/emacs-macos-appearance-theme-selector.git ~/.doom.d/local/appearance-theme-selector
+```
+
+2. Add to `~/.doom.d/packages.el`:
+```elisp
+(package! appearance-theme-selector
+  :recipe (:local-repo "appearance-theme-selector"))
+```
+
+3. Configure in `~/.doom.d/config.el` as shown in Option A above.
+
+4. Run `doom sync` to register the local package.
+
 ## Configuration
 
 ### Basic Setup
