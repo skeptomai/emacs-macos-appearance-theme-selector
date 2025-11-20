@@ -1,6 +1,6 @@
 # Appearance Theme Selector - Emacs Package
 
-This is an Emacs Lisp package that automatically switches themes when macOS changes between light and dark appearance modes.
+This is an Emacs Lisp package that reacts to macOS system appearance notifications and automatically switches Emacs themes between light and dark modes. The package maintains configured lists of themes for each appearance state (light/dark) and switches between them when macOS changes its appearance setting.
 
 ## Package Overview
 

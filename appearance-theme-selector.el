@@ -159,15 +159,37 @@ This is the main hook function that responds to system changes."
   ;; Only act if appearance actually changed
   (unless (eq appearance appearance-theme-selector--last-appearance)
     (setq appearance-theme-selector--last-appearance appearance)
-    (let ((theme (appearance-theme-selector--select-theme appearance)))
-      (appearance-theme-selector--apply-theme theme))))
+    (let ((saved-theme (appearance-theme-selector--get-saved-theme appearance))
+          (available-themes (appearance-theme-selector--get-themes-for-appearance appearance)))
+      (cond
+       ;; No themes configured for this appearance
+       ((null available-themes)
+        (display-warning 'appearance-theme-selector
+                        (format "No %s themes configured. Set appearance-theme-selector-%s-themes."
+                                appearance appearance)
+                        :warning))
+       ;; Have saved preference, use it
+       (saved-theme
+        (appearance-theme-selector--apply-theme saved-theme))
+       ;; No saved preference - warn user to select manually
+       (t
+        (display-warning 'appearance-theme-selector
+                        (format "No saved %s theme preference. Use M-x appearance-theme-selector-choose-theme to select one."
+                                appearance)
+                        :warning))))))
 
 (defun appearance-theme-selector--current-appearance ()
   "Determine current system appearance mode.
-Returns 'light or 'dark based on frame background mode."
-  (if (eq (frame-parameter nil 'background-mode) 'dark)
-      'dark
-    'light))
+Returns 'light or 'dark based on macOS system appearance."
+  (if (and (boundp 'ns-system-appearance)
+           ns-system-appearance)
+      (if (eq ns-system-appearance 'dark)
+          'dark
+        'light)
+    ;; Fallback to frame background mode if ns-system-appearance unavailable
+    (if (eq (frame-parameter nil 'background-mode) 'dark)
+        'dark
+      'light)))
 
 ;;; Interactive Commands
 
@@ -175,11 +197,16 @@ Returns 'light or 'dark based on frame background mode."
 (defun appearance-theme-selector-choose-theme (&optional appearance)
   "Manually select a theme for APPEARANCE mode.
 If APPEARANCE is nil, use current system appearance.
-This command always prompts for selection and saves the preference."
+This command always prompts for selection and saves the preference.
+Only applies the theme if it matches the current system appearance."
   (interactive)
   (let* ((mode (or appearance (appearance-theme-selector--current-appearance)))
+         (current-appearance (appearance-theme-selector--current-appearance))
          (theme (appearance-theme-selector--select-theme mode t)))
-    (appearance-theme-selector--apply-theme theme)))
+    (if (eq mode current-appearance)
+        (appearance-theme-selector--apply-theme theme)
+      (message "Theme %s saved for %s mode (not applied since system is currently %s)"
+               theme mode current-appearance))))
 
 ;;;###autoload
 (defun appearance-theme-selector-reset-preferences ()
@@ -200,6 +227,26 @@ You will be prompted to select themes on the next appearance change."
     (message "Light theme: %s | Dark theme: %s"
              (or light-theme "not set")
              (or dark-theme "not set"))))
+
+;;;###autoload
+(defun appearance-theme-selector-setup-themes ()
+  "Set up theme preferences for both light and dark modes.
+This is a convenience command for initial configuration."
+  (interactive)
+  ;; Set up both themes without applying either
+  (message "Setting up light theme preference...")
+  (appearance-theme-selector--select-theme 'light t)
+
+  (message "Setting up dark theme preference...")
+  (appearance-theme-selector--select-theme 'dark t)
+
+  ;; Now apply the correct theme for current system state
+  (let ((current-appearance (appearance-theme-selector--current-appearance))
+        (current-theme (appearance-theme-selector--get-saved-theme
+                       (appearance-theme-selector--current-appearance))))
+    (appearance-theme-selector--apply-theme current-theme)
+    (message "Setup complete. Applied %s theme for current %s mode."
+             current-theme current-appearance)))
 
 ;;;###autoload
 (defun appearance-theme-selector-apply-current ()
