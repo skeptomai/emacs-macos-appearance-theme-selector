@@ -37,6 +37,15 @@
 ;; M-x appearance-theme-selector-choose-theme
 ;;   Manually select a theme for the current appearance mode
 ;;
+;; M-x appearance-theme-selector-cycle-theme
+;;   Cycle through recently used themes for current appearance
+;;
+;; M-x appearance-theme-selector-add-theme
+;;   Add a theme to the configured list for current or specified appearance
+;;
+;; M-x appearance-theme-selector-setup-themes
+;;   Set up both light and dark theme preferences at once
+;;
 ;; M-x appearance-theme-selector-reset-preferences
 ;;   Clear saved theme preferences and re-prompt on next change
 
@@ -80,8 +89,9 @@ If nil, will only prompt the first time or when explicitly commanded."
 ;;; Internal Variables
 
 (defvar appearance-theme-selector--preferences nil
-  "Alist mapping appearance modes to selected themes.
-Format: ((light . theme-symbol) (dark . theme-symbol))")
+  "Alist mapping appearance modes to recently used themes.
+Format: ((light . (theme1 theme2 theme3)) (dark . (theme1 theme2 theme3)))
+Themes are stored in most-recently-used order.")
 
 (defvar appearance-theme-selector--last-appearance nil
   "The last appearance mode we responded to.")
@@ -89,16 +99,33 @@ Format: ((light . theme-symbol) (dark . theme-symbol))")
 ;;; Persistence
 
 (defun appearance-theme-selector--load-preferences ()
-  "Load saved theme preferences from disk."
+  "Load saved theme preferences from disk.
+Automatically migrates old format to new recently-used format."
   (when (file-exists-p appearance-theme-selector-save-file)
     (condition-case err
         (with-temp-buffer
           (insert-file-contents appearance-theme-selector-save-file)
-          (setq appearance-theme-selector--preferences
-                (read (current-buffer))))
+          (let ((loaded-prefs (read (current-buffer))))
+            ;; Check if we need to migrate from old format
+            (setq appearance-theme-selector--preferences
+                  (appearance-theme-selector--migrate-preferences loaded-prefs))))
       (error
        (message "Failed to load appearance-theme-selector preferences: %s" err)
        (setq appearance-theme-selector--preferences nil)))))
+
+(defun appearance-theme-selector--migrate-preferences (prefs)
+  "Migrate PREFS from old format to new recently-used format.
+Old format: ((light . theme-symbol) (dark . theme-symbol))
+New format: ((light . (theme-list)) (dark . (theme-list)))"
+  (mapcar (lambda (entry)
+            (let ((appearance (car entry))
+                  (theme-or-list (cdr entry)))
+              (if (listp theme-or-list)
+                  ;; Already new format
+                  entry
+                ;; Old format - convert single theme to list
+                (cons appearance (list theme-or-list)))))
+          prefs))
 
 (defun appearance-theme-selector--save-preferences ()
   "Save current theme preferences to disk."
@@ -118,13 +145,20 @@ Format: ((light . theme-symbol) (dark . theme-symbol))")
     (_ (error "Unknown appearance mode: %s" appearance))))
 
 (defun appearance-theme-selector--get-saved-theme (appearance)
-  "Get the saved theme preference for APPEARANCE mode, if any."
-  (alist-get appearance appearance-theme-selector--preferences))
+  "Get the most recently used theme for APPEARANCE mode, if any."
+  (car (alist-get appearance appearance-theme-selector--preferences)))
 
 (defun appearance-theme-selector--save-theme (appearance theme)
-  "Save THEME as the preference for APPEARANCE mode."
-  (setf (alist-get appearance appearance-theme-selector--preferences)
-        theme)
+  "Save THEME as the most recently used theme for APPEARANCE mode.
+Maintains a list of recently used themes, with the new theme moved to the front."
+  (let ((current-themes (alist-get appearance appearance-theme-selector--preferences)))
+    ;; Remove theme if it already exists, then add to front
+    (setq current-themes (cons theme (remove theme current-themes)))
+    ;; Keep only the 5 most recent themes
+    (setq current-themes (seq-take current-themes 5))
+    ;; Update the preferences
+    (setf (alist-get appearance appearance-theme-selector--preferences)
+          current-themes))
   (appearance-theme-selector--save-preferences))
 
 (defun appearance-theme-selector--select-theme (appearance &optional force-prompt)
@@ -229,11 +263,15 @@ You will be prompted to select themes on the next appearance change."
 (defun appearance-theme-selector-show-preferences ()
   "Display current theme preferences."
   (interactive)
-  (let ((light-theme (appearance-theme-selector--get-saved-theme 'light))
-        (dark-theme (appearance-theme-selector--get-saved-theme 'dark)))
-    (message "Light theme: %s | Dark theme: %s"
-             (or light-theme "not set")
-             (or dark-theme "not set"))))
+  (let ((light-themes (alist-get 'light appearance-theme-selector--preferences))
+        (dark-themes (alist-get 'dark appearance-theme-selector--preferences)))
+    (message "Recent light themes: %s | Recent dark themes: %s"
+             (if light-themes
+                 (mapconcat #'symbol-name light-themes ", ")
+               "none")
+             (if dark-themes
+                 (mapconcat #'symbol-name dark-themes ", ")
+               "none"))))
 
 ;;;###autoload
 (defun appearance-theme-selector-setup-themes ()
@@ -265,6 +303,72 @@ Useful for initial setup or manual synchronization."
   (interactive)
   (let ((appearance (appearance-theme-selector--current-appearance)))
     (appearance-theme-selector--handle-appearance-change appearance)))
+
+;;;###autoload
+(defun appearance-theme-selector-add-theme (theme &optional appearance)
+  "Add THEME to the configured list for APPEARANCE mode.
+If APPEARANCE is nil, add to the list for current system appearance.
+This makes the theme available for selection without immediately applying it."
+  (interactive
+   (list (intern (completing-read "Theme to add: "
+                                  (mapcar #'symbol-name (custom-available-themes))
+                                  nil t))
+         (when current-prefix-arg
+           (intern (completing-read "Appearance mode: " '("light" "dark") nil t)))))
+  (let ((mode (or appearance (appearance-theme-selector--current-appearance))))
+    (cond
+     ((eq mode 'light)
+      (unless (memq theme appearance-theme-selector-light-themes)
+        (setq appearance-theme-selector-light-themes
+              (append appearance-theme-selector-light-themes (list theme)))
+        (message "Added %s to light themes" theme)))
+     ((eq mode 'dark)
+      (unless (memq theme appearance-theme-selector-dark-themes)
+        (setq appearance-theme-selector-dark-themes
+              (append appearance-theme-selector-dark-themes (list theme)))
+        (message "Added %s to dark themes" theme)))
+     (t (error "Unknown appearance mode: %s" mode)))))
+
+;;;###autoload
+(defun appearance-theme-selector-cycle-theme (&optional backward)
+  "Cycle through recently used themes for current appearance mode.
+If BACKWARD is non-nil, cycle in reverse order.
+If no recently used themes exist, prompt to select from configured themes."
+  (interactive "P")
+  (let* ((current-appearance (appearance-theme-selector--current-appearance))
+         (recent-themes (alist-get current-appearance appearance-theme-selector--preferences))
+         (available-themes (appearance-theme-selector--get-themes-for-appearance current-appearance)))
+    (cond
+     ;; No recent themes - prompt to select one
+     ((null recent-themes)
+      (let ((theme (appearance-theme-selector--select-theme current-appearance t)))
+        (appearance-theme-selector--apply-theme theme)))
+     ;; Only one recent theme - no cycling possible
+     ((= (length recent-themes) 1)
+      (message "Only one recent %s theme: %s" current-appearance (car recent-themes)))
+     ;; Multiple recent themes - cycle through them
+     (t
+      (let* ((current-theme (car recent-themes))
+             (next-theme (if backward
+                            (car (last recent-themes))
+                          (cadr recent-themes))))
+        ;; Move the selected theme to front of recent list
+        (appearance-theme-selector--save-theme current-appearance next-theme)
+        (appearance-theme-selector--apply-theme next-theme)
+        (message "Switched to %s theme: %s (%d/%d)"
+                 current-appearance next-theme 1 (length recent-themes)))))))
+
+;;;###autoload
+(defun appearance-theme-selector-list-recent-themes (&optional appearance)
+  "Show recently used themes for APPEARANCE mode.
+If APPEARANCE is nil, show for current system appearance."
+  (interactive)
+  (let* ((mode (or appearance (appearance-theme-selector--current-appearance)))
+         (recent-themes (alist-get mode appearance-theme-selector--preferences)))
+    (if recent-themes
+        (message "Recent %s themes: %s" mode
+                 (mapconcat #'symbol-name recent-themes ", "))
+      (message "No recent %s themes" mode))))
 
 ;;; Minor Mode
 
