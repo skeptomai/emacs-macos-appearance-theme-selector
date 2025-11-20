@@ -17,10 +17,11 @@
 ;;
 ;; Features:
 ;; - Maintains separate lists of light and dark themes
-;; - Prompts for theme selection on first appearance change
+;; - Non-blocking warnings when themes need to be configured
 ;; - Remembers your selections across Emacs sessions
 ;; - Provides commands to manually change theme preferences
 ;; - Integrates with Emacs 29+ native appearance change hooks
+;; - Prevents hanging during system appearance changes
 ;;
 ;; Usage:
 ;;
@@ -155,23 +156,24 @@ Otherwise, return saved preference or prompt if none exists."
 
 (defun appearance-theme-selector--handle-appearance-change (appearance)
   "Handle system appearance change to APPEARANCE mode.
-This is the main hook function that responds to system changes."
-  ;; Only act if appearance actually changed
+This is the main hook function that responds to macOS system changes.
+Uses non-blocking warnings instead of prompts to avoid hanging during system hooks."
+  ;; Only act if appearance actually changed to avoid redundant processing
   (unless (eq appearance appearance-theme-selector--last-appearance)
     (setq appearance-theme-selector--last-appearance appearance)
     (let ((saved-theme (appearance-theme-selector--get-saved-theme appearance))
           (available-themes (appearance-theme-selector--get-themes-for-appearance appearance)))
       (cond
-       ;; No themes configured for this appearance
+       ;; No themes configured for this appearance mode
        ((null available-themes)
         (display-warning 'appearance-theme-selector
                         (format "No %s themes configured. Set appearance-theme-selector-%s-themes."
                                 appearance appearance)
                         :warning))
-       ;; Have saved preference, use it
+       ;; Have saved preference - apply it immediately
        (saved-theme
         (appearance-theme-selector--apply-theme saved-theme))
-       ;; No saved preference - warn user to select manually
+       ;; No saved preference - warn user to select manually (avoids blocking prompts)
        (t
         (display-warning 'appearance-theme-selector
                         (format "No saved %s theme preference. Use M-x appearance-theme-selector-choose-theme to select one."
@@ -180,9 +182,11 @@ This is the main hook function that responds to system changes."
 
 (defun appearance-theme-selector--current-appearance ()
   "Determine current system appearance mode.
-Returns 'light or 'dark based on macOS system appearance."
+Returns 'light or 'dark based on macOS system appearance.
+Uses ns-system-appearance for accurate macOS detection, with fallback to frame background mode."
   (if (and (boundp 'ns-system-appearance)
            ns-system-appearance)
+      ;; Use macOS system appearance when available (Emacs 29.1+)
       (if (eq ns-system-appearance 'dark)
           'dark
         'light)
@@ -198,13 +202,16 @@ Returns 'light or 'dark based on macOS system appearance."
   "Manually select a theme for APPEARANCE mode.
 If APPEARANCE is nil, use current system appearance.
 This command always prompts for selection and saves the preference.
-Only applies the theme if it matches the current system appearance."
+Only applies the theme if it matches the current system appearance to prevent
+applying light themes in dark mode and vice versa."
   (interactive)
   (let* ((mode (or appearance (appearance-theme-selector--current-appearance)))
          (current-appearance (appearance-theme-selector--current-appearance))
          (theme (appearance-theme-selector--select-theme mode t)))
     (if (eq mode current-appearance)
+        ;; Theme matches current appearance - apply it
         (appearance-theme-selector--apply-theme theme)
+      ;; Theme doesn't match current appearance - save but don't apply
       (message "Theme %s saved for %s mode (not applied since system is currently %s)"
                theme mode current-appearance))))
 
@@ -231,22 +238,25 @@ You will be prompted to select themes on the next appearance change."
 ;;;###autoload
 (defun appearance-theme-selector-setup-themes ()
   "Set up theme preferences for both light and dark modes.
-This is a convenience command for initial configuration."
+This is a convenience command for initial configuration.
+Prompts for both themes but only applies the one matching current system appearance."
   (interactive)
-  ;; Set up both themes without applying either
+  ;; Set up both themes without applying either during selection
   (message "Setting up light theme preference...")
   (appearance-theme-selector--select-theme 'light t)
 
   (message "Setting up dark theme preference...")
   (appearance-theme-selector--select-theme 'dark t)
 
-  ;; Now apply the correct theme for current system state
-  (let ((current-appearance (appearance-theme-selector--current-appearance))
-        (current-theme (appearance-theme-selector--get-saved-theme
-                       (appearance-theme-selector--current-appearance))))
-    (appearance-theme-selector--apply-theme current-theme)
-    (message "Setup complete. Applied %s theme for current %s mode."
-             current-theme current-appearance)))
+  ;; Apply the correct theme for current system state
+  (let* ((current-appearance (appearance-theme-selector--current-appearance))
+         (current-theme (appearance-theme-selector--get-saved-theme current-appearance)))
+    (if current-theme
+        (progn
+          (appearance-theme-selector--apply-theme current-theme)
+          (message "Setup complete. Applied %s theme for current %s mode."
+                   current-theme current-appearance))
+      (error "Failed to get theme for current %s appearance" current-appearance))))
 
 ;;;###autoload
 (defun appearance-theme-selector-apply-current ()
